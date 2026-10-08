@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gas Alarm App</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            color: white;
+        }
+        .app-container {
+            background: linear-gradient(135deg, #16213e 0%, #0f3460 100%);
+            width: 100%;
+            max-width: 420px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0 20px 20px 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #4CAF50, #2E7D32);
+            color: white;
+            width: calc(100% + 40px);
+            padding: 25px 0;
+            font-size: 22px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        #connectionStatus {
+            font-size: 16px;
+            font-weight: bold;
+            color: #ff4444;
+            margin-bottom: 15px;
+            padding: 10px 20px;
+            border-radius: 25px;
+            background: rgba(255,255,255,0.1);
+        }
+        #debugLog {
+            font-size: 11px;
+            color: #aaa;
+            margin-bottom: 20px;
+            min-height: 20px;
+            word-break: break-all;
+            text-align: center;
+            padding: 0 10px;
+        }
+        #alarmStatus {
+            font-size: 70px;
+            font-weight: bold;
+            color: #4CAF50;
+            margin-bottom: 40px;
+            text-shadow: 0 0 20px rgba(76,175,80,0.5);
+            transition: 0.3s;
+        }
+        #btnOff {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            border: none;
+            padding: 18px 50px;
+            font-size: 26px;
+            font-weight: bold;
+            color: white;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 6px 20px rgba(231,76,60,0.4);
+            width: 85%;
+            margin-bottom: 15px;
+        }
+        #btnOff:active {
+            transform: translateY(3px);
+            box-shadow: 0 2px 10px rgba(231,76,60,0.4);
+        }
+        #btnTestAlarm {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+            border-radius: 50px;
+            cursor: pointer;
+            width: 85%;
+            margin-bottom: 10px;
+        }
+        #btnTestSafe {
+            background: linear-gradient(135deg, #27ae60, #2ecc71);
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+            border-radius: 50px;
+            cursor: pointer;
+            width: 85%;
+            margin-bottom: 10px;
+        }
+        .blinking { animation: blinker 0.5s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+        .alarm-bg { background: linear-gradient(135deg, #4a0000 0%, #8b0000 100%) !important; }
+    </style>
+</head>
+<body>
+
+    <div class="app-container" id="appContainer">
+        <div class="header">🔥 HỆ THỐNG BÁO KHÍ GAS</div>
+
+        <div id="connectionStatus">⏳ Đang kết nối Firebase...</div>
+        <div id="debugLog"></div>
+        <div id="alarmStatus">---</div>
+
+        <button id="btnOff">🔕 TẮT BÁO ĐỘNG</button>
+        <button id="btnTestAlarm">⚠️ TEST: Giả lập BÁO ĐỘNG</button>
+        <button id="btnTestSafe">✅ TEST: Giả lập AN TOÀN</button>
+    </div>
+
+    <!-- Firebase SDK compat (KHÔNG dùng module, chạy được từ file://) -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+
+    <script>
+        var connLabel = document.getElementById("connectionStatus");
+        var statusLabel = document.getElementById("alarmStatus");
+        var debugLog = document.getElementById("debugLog");
+        var appContainer = document.getElementById("appContainer");
+
+        // ====== KẾT NỐI FIREBASE ======
+        var firebaseConfig = {
+            databaseURL: "https://gasalarm-d6c47-default-rtdb.asia-southeast1.firebasedatabase.app"
+        };
+
+        try {
+            firebase.initializeApp(firebaseConfig);
+            var db = firebase.database();
+            var gasAlarmRef = db.ref("GasAlarm");
+            debugLog.innerText = "Firebase SDK đã tải thành công!";
+        } catch(e) {
+            connLabel.innerText = "❌ Lỗi khởi tạo Firebase!";
+            debugLog.innerText = "Lỗi: " + e.message;
+        }
+
+        // ====== ÂM THANH CÒI HÚ (Web Audio API) ======
+        var audioCtx = null;
+        var oscillator = null;
+        var gainNode = null;
+        var sirenInterval = null;
+        var isAlarmPlaying = false;
+
+        function playAlarm() {
+            if (isAlarmPlaying) return;
+            isAlarmPlaying = true;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                oscillator = audioCtx.createOscillator();
+                gainNode = audioCtx.createGain();
+                oscillator.type = "square";
+                oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.start();
+                // Hiệu ứng còi hú lên xuống
+                sirenInterval = setInterval(function() {
+                    if (oscillator && isAlarmPlaying) {
+                        oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
+                        oscillator.frequency.linearRampToValueAtTime(1200, audioCtx.currentTime + 0.5);
+                        oscillator.frequency.linearRampToValueAtTime(800, audioCtx.currentTime + 1.0);
+                    }
+                }, 1000);
+            } catch(e) {
+                debugLog.innerText = "Lỗi âm thanh: " + e.message;
+            }
+        }
+
+        function stopAlarm() {
+            isAlarmPlaying = false;
+            if (sirenInterval) { clearInterval(sirenInterval); sirenInterval = null; }
+            try {
+                if (oscillator) { oscillator.stop(); oscillator = null; }
+                if (audioCtx) { audioCtx.close(); audioCtx = null; }
+            } catch(e) {}
+        }
+
+        // ====== LẮNG NGHE DỮ LIỆU REALTIME TỪ FIREBASE ======
+        gasAlarmRef.on("value", function(snapshot) {
+            var data = snapshot.val();
+            debugLog.innerText = "Nhận: " + JSON.stringify(data);
+
+            if (!data) {
+                connLabel.innerText = "❌ Database trống (null)";
+                connLabel.style.color = "#ff4444";
+                return;
+            }
+
+            // Trạng thái kết nối thiết bị
+            if (data.device_status === "connected") {
+                connLabel.innerText = "🟢 Thiết bị đã kết nối";
+                connLabel.style.color = "#4CAF50";
+            } else {
+                connLabel.innerText = "🔴 Thiết bị chưa kết nối (Ngủ)";
+                connLabel.style.color = "#ff4444";
+            }
+
+            // Trạng thái báo động
+            if (data.status === "ALARM") {
+                statusLabel.innerText = "🚨 ALARM";
+                statusLabel.style.color = "#ff0000";
+                statusLabel.style.textShadow = "0 0 30px rgba(255,0,0,0.8)";
+                statusLabel.classList.add("blinking");
+                appContainer.classList.add("alarm-bg");
+                
+                // Hiển thị nồng độ Gas nếu có
+                if (data.gas_level !== undefined && data.gas_level !== null) {
+                    debugLog.innerText += "\n👉 Nồng độ Gas (ADC): " + data.gas_level;
+                }
+                
+                playAlarm();
+                if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+            } else {
+                statusLabel.innerText = "✅ SAFE";
+                statusLabel.style.color = "#4CAF50";
+                statusLabel.style.textShadow = "0 0 20px rgba(76,175,80,0.5)";
+                statusLabel.classList.remove("blinking");
+                appContainer.classList.remove("alarm-bg");
+                stopAlarm();
+            }
+        }, function(error) {
+            connLabel.innerText = "❌ Lỗi kết nối Firebase!";
+            connLabel.style.color = "#ff4444";
+            debugLog.innerText = "Lỗi: " + error.message;
+        });
+
+        // ====== NÚT TẮT BÁO ĐỘNG ======
+        document.getElementById("btnOff").addEventListener("click", function() {
+            stopAlarm();
+            gasAlarmRef.update({ command: "OFF", gas_level: null })
+                .then(function() { debugLog.innerText = "Đã gửi lệnh OFF!"; })
+                .catch(function(e) { debugLog.innerText = "Lỗi gửi OFF: " + e.message; });
+        });
+
+        // ====== NÚT TEST: GIẢ LẬP BÁO ĐỘNG (thay ESP32) ======
+        document.getElementById("btnTestAlarm").addEventListener("click", function() {
+            gasAlarmRef.update({
+                status: "ALARM",
+                device_status: "connected",
+                command: "",
+                gas_level: Math.floor(Math.random() * 2000) + 1000 // Random nồng độ giả lập
+            }).then(function() { debugLog.innerText = "Đã gửi ALARM!"; })
+              .catch(function(e) { debugLog.innerText = "Lỗi: " + e.message; });
+        });
+
+        // ====== NÚT TEST: GIẢ LẬP AN TOÀN ======
+        document.getElementById("btnTestSafe").addEventListener("click", function() {
+            gasAlarmRef.update({
+                status: "SAFE",
+                device_status: "disconnected",
+                command: "",
+                gas_level: null
+            }).then(function() { debugLog.innerText = "Đã gửi SAFE!"; })
+              .catch(function(e) { debugLog.innerText = "Lỗi: " + e.message; });
+        });
+    </script>
+</body>
+</html>
